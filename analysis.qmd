@@ -2,4 +2,140 @@
 title: "Analyzing US Births"
 author: "Angel Frias"
 format: html
+execute:
+  echo: false
 ---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+#| cache: true
+births_tibble <- read_excel("data/us_births_1994_2014.xlsx") |>
+  mutate(
+    day_of_week = factor(
+      day_of_week,
+      levels = c("Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"),
+      ordered = TRUE
+    )
+  )
+```
+
+```{r}
+births_tibble |>
+  summarize(
+    mean_births = mean(births),
+    .by = c(month, date_of_month)
+  ) |>
+  mutate(
+    month = factor(month, levels = 12:1, labels = month.abb[12:1])
+  ) |>
+  ggplot(aes(x = date_of_month, y = month, fill = mean_births)) +
+  geom_tile(width = 1, height = 1) +
+  scale_x_continuous(breaks = 1:31, expand = c(0, 0)) +
+  scale_y_discrete(expand = c(0, 0)) +
+  labs(
+    x = "Day of month",
+    y = "Month",
+    fill = "Mean births"
+  )
+```
+
+```{r}
+christmas_summary <- births_tibble |>
+  filter(month == 12) |>
+  summarize(
+    christmas_births = births[date_of_month == 25],
+    christmas_weekday = day_of_week[date_of_month == 25],
+    baseline_births = mean(births[date_of_month %in% c(20:24, 27:30)]),
+    pct_of_baseline = round(100 * christmas_births / baseline_births, 1),
+    .by = year
+  ) |>
+  arrange(year)
+
+christmas_summary |>
+  print(n = Inf)
+```
+
+```{r}
+christmas_summary |>
+  ggplot(aes(x = year, y = pct_of_baseline)) +
+  geom_line() +
+  geom_point(aes(color = christmas_weekday)) +
+  labs(
+    x = "Year",
+    y = "December 25 births (% of baseline)",
+    color = "Weekday",
+    title = "Christmas Day births relative to nearby December days"
+  )
+```
+
+```{r}
+births_model <- lm(
+  births ~ factor(year) + factor(month) + factor(day_of_week),
+  data = births_tibble
+)
+
+summary(births_model)$r.squared
+
+births_tibble <- births_tibble |>
+  mutate(residual = resid(births_model))
+
+births_adjusted <- births_tibble |>
+  mutate(pct_resid = 100 * residual / mean(births))
+
+calendar_resid <- births_adjusted |>
+  filter(!(month == 2 & date_of_month == 29)) |>
+  summarize(
+    mean_pct_resid = mean(pct_resid),
+    .by = c(month, date_of_month)
+  ) |>
+  mutate(calendar_date = make_date(2001, month, date_of_month)) |>
+  arrange(calendar_date)
+
+calendar_resid
+```
+
+```{r}
+holiday_dips <- calendar_resid |>
+  filter(
+    calendar_date %in% make_date(
+      2001,
+      c(12, 7, 1),
+      c(25, 4, 1)
+    )
+  ) |>
+  mutate(
+    holiday = case_when(
+      month == 12 & date_of_month == 25 ~ "Christmas",
+      month == 7 & date_of_month == 4 ~ "July 4",
+      month == 1 & date_of_month == 1 ~ "New Year's Day"
+    )
+  )
+
+calendar_resid |>
+  ggplot(aes(x = calendar_date, y = mean_pct_resid)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_line() +
+  geom_text(
+    data = holiday_dips,
+    aes(
+      label = holiday,
+      hjust = case_when(
+        month == 1 ~ 0,
+        month == 12 ~ 1,
+        TRUE ~ 0.5
+      )
+    ),
+    vjust = -0.8
+  ) +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  labs(
+    x = "Calendar date",
+    y = "Mean residual (% of average births)",
+    title = "Daily birth residuals across the calendar"
+  )
+```
